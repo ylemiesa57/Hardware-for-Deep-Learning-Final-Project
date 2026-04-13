@@ -1,0 +1,99 @@
+{% set DRAM_BW_GBps       = DRAM_BW_GBps       | default(68)    %}  {# LPDDR5 bandwidth in GB/s #}
+{% set SRAM_READ_BW_GBps  = SRAM_READ_BW_GBps  | default(512)   %}  {# On-chip SRAM read  bandwidth in GB/s #}
+{% set SRAM_WRITE_BW_GBps = SRAM_WRITE_BW_GBps | default(128)   %}  {# On-chip SRAM write bandwidth in GB/s #}
+{% set SRAM_SIZE_MB       = SRAM_SIZE_MB       | default(8)     %}  {# On-chip SRAM capacity in MB #}
+{% set DRAM_SIZE_GB       = DRAM_SIZE_GB       | default(8)     %}  {# Off-chip DRAM capacity in GB #}
+{% set MAC_ENERGY_pJ      = MAC_ENERGY_pJ      | default(0.084) %}  {# FP16 MAC energy in pJ (nvdla/tpu_v4i) #}
+{% set MAC_CLOCK_GHz      = MAC_CLOCK_GHz      | default(1)     %}  {# Clock frequency in GHz #}
+
+arch:
+  nodes:
+
+  # -----------------------------------------------------------------------
+  # Tier 0 — Disk (modelled after NVMe SSD but infinite capacity)
+  # Stores raw tokenized documents D[n,t]. Embedding (D->Z_D) is done
+  # offline so disk energy is zero — only latency is modeled.
+  # Bandwidth: 7 GB/s (PCIe 4.0 x4, e.g. Samsung 990 Pro / Intel P5800X)
+  # Latency: 1 / (7e9 * 8) converts GB/s → seconds/bit
+  # -----------------------------------------------------------------------
+  - !Memory
+    name: Disk
+    size: inf
+    leak_power: 0
+    area: 0
+    actions:
+    - {name: read,  energy: 0, latency: 1 / (7e9 * 8)}
+    - {name: write, energy: 0, latency: 1 / (7e9 * 8)}
+    tensors: {keep: ~Intermediates, may_keep: All}
+
+  # -----------------------------------------------------------------------
+  # Tier 1 — Off-chip DRAM ({{DRAM_SIZE_GB}} GB LPDDR5)
+  # Z_D is streamed here from disk at inference time.
+  # Energy: 7.03e-12 J/access = 0.88 pJ/bit
+  #   Source: JEDEC LPDDR5 spec; same value used in AccelForge's
+  #           nvdla.yaml and tpu_v4i.yaml examples.
+  # Latency: 1 / (BW_GB/s × 8) converts GB/s → seconds/bit
+  # -----------------------------------------------------------------------
+  - !Memory
+    name: MainMemory
+    size: {{DRAM_SIZE_GB}}*1024*1024*1024*8   # {{DRAM_SIZE_GB}} GB in bits
+    leak_power: 0
+    area: 0
+    actions:
+    - {name: read,  energy: 7.03e-12, latency: 1 / ({{DRAM_BW_GBps}}e9 * 8)}
+    - {name: write, energy: 7.03e-12, latency: 1 / ({{DRAM_BW_GBps}}e9 * 8)}
+    tensors: {keep: ~Intermediates, may_keep: All}
+
+  # -----------------------------------------------------------------------
+  # Tier 2 — On-chip SRAM ({{SRAM_SIZE_MB}} MB scratchpad)
+  # Holds query intermediates (X, Q, K, V, A, P, H, Z_Q, S).
+  # Energy: 0.249e-12 read / 0.293e-12 write J/bit
+  #   Source: TPU v4i LocalBuffer values from AccelForge's tpu_v4i.yaml.
+  # Bandwidth: separate read/write ports, latency uses same conversion.
+  # -----------------------------------------------------------------------
+  - !Memory
+    name: OnChipSRAM
+    size: {{SRAM_SIZE_MB}}*1024*1024*8        # {{SRAM_SIZE_MB}} MB in bits
+    total_latency: max(read_latency, write_latency)
+    leak_power: 0
+    area: {{SRAM_SIZE_MB}}e-6                 # ~1 mm^2 per MB at 16nm
+    actions:
+    - {name: read,  energy: 0.249e-12, latency: 1 / ({{SRAM_READ_BW_GBps}}e9 * 8)}
+    - {name: write, energy: 0.293e-12, latency: 1 / ({{SRAM_WRITE_BW_GBps}}e9 * 8)}
+    tensors: {keep: All}
+
+  # -----------------------------------------------------------------------
+  # Compute — FP16 MAC
+  # Energy: 0.084e-12 J/op = 0.084 pJ/MAC
+  #   Source: AccelForge nvdla.yaml and tpu_v4i.yaml examples.
+  # Latency: 1 / (clock_Hz), one MAC per cycle.
+  # -----------------------------------------------------------------------
+  - !Compute
+    name: MAC
+    leak_power: 0
+    area: 9e-11
+    actions:
+    - {name: compute, energy: {{MAC_ENERGY_pJ}}e-12, latency: 1 / ({{MAC_CLOCK_GHz}}e9)}
+    enabled: len(All) == 3
+
+  # -----------------------------------------------------------------------
+  # Compute — Copy (for 2-tensor operations like softmax placeholders)
+  # Copy operations have zero compute energy — they only incur memory
+  # read/write costs which are captured by the memory nodes.
+  # -----------------------------------------------------------------------
+  - !Compute
+    name: Copy
+    leak_power: 0
+    area: 0
+    actions:
+    - {name: compute, energy: 0, latency: 1 / ({{MAC_CLOCK_GHz}}e9)}
+    enabled: len(All) == 2
+
+#fp16
+variables:
+  supported_input_bits:  16
+  supported_weight_bits: 16
+  supported_output_bits: 16
+
+
+renames: {}
