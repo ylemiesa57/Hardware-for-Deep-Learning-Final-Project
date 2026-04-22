@@ -1,0 +1,114 @@
+workload:
+  # Let D[n, l] = tokenized documents, num_docs x L tokens long
+  # Let ZD[n, j] = embewed documents, embewed before inference
+
+  rank_sizes:
+    {% set N_TOKENS = N_TOKENS | default(512) %}
+    {% set N_DOCS = N_DOCS | default(1024) %}
+    {% set K = K | default(10) %} # number of docs
+    {% set L = L | default(512) %} # length of docs
+    {% set BATCH_SIZE = BATCH_SIZE | default(1) %}
+    {% set INPUT_TOKENS = INPUT_TOKENS | default(1024 + K * L) %}
+
+    # Encoder
+    P: {{N_TOKENS}}        # query length
+    M: {{N_TOKENS}}        # number of query tokens
+    N: {{N_DOCS}}          # number of documents
+    H: 12                  # num_heads
+    E: 64                  # head_dim
+    F: 64
+    D: {{12*64}}           # 768
+    C: {{4*12*64}}         # 3072
+    J: {{12*64}}           # 768
+    G: {{12*64}}           # 768
+
+    # Decoder
+    B: {{BATCH_SIZE}}
+    I: {{INPUT_TOKENS}}
+    T: {{INPUT_TOKENS}}
+    Q: 32
+    R: 128
+    S: 128
+    W: 4096
+    X: 16384
+    Y: 4096
+    Z: 4096
+
+    L: {{L}}
+
+  bits_per_value:
+    All: 8
+
+  # persistent_tensors: weight - Intermediates
+
+  einsums:
+    # Input copy
+    - einsum: "I[b, m, d] = I_in[b, m, d]"
+      is_copy_operation: True
+
+    # QKV projections
+    - einsum: "V[b, m, h, e] = I[b, m, d] * WV[h, e, d]"
+    - einsum: "K[b, m, h, e] = I[b, m, d] * WK[h, e, d]"
+    - einsum: "Q[b, m, h, e] = I[b, m, d] * WQ[h, e, d]"
+
+    # Attention scores
+    - einsum: "QK[b, m, p, h] = Q[b, m, h, e] * K[b, M: p, h, e]"
+    - einsum: "QK_softmax[b, m, p, h] = QK[b, m, p, h]"
+
+    # Attention
+    - einsum: "AV[b, m, h, f] = QK_softmax[b, m, p, h] * V[b, M: p, h, E: f]"
+
+    # Output projection + sN
+    - einsum: "Z[b, m, g] = AV[b, m, h, f] * WZ[h, f, g]"
+    - einsum: "FFA[b, m, c] = Z[b, m, g] * WFFA[g, c]"
+    - einsum: "FFB[b, m, j] = sA[b, m, c] * WFFB[c, j]"
+
+    # CLS pooling
+    - einsum: "CLS[b, j] = sB[b, m, j] * CLS_mask[m]" # sp
+
+    # Similarity
+    - einsum: "SIM[b, n] = ZD[n, j] * CLS[b, j]" # sp
+
+    # Retrieval
+    - einsum: "TK[b, n, l] = D[n, l] * SIM[b, n]" # sp
+
+    # Flatten tokens
+    - einsum: "TK_flat[b, t] = TK[b, n, l]"
+      is_copy_operation: True
+
+    # Embewing lookup
+    - einsum: "II_in[b, t, w] = TK_flat[b, t] * WE[t, w]"
+
+    # Decoder copy
+    - einsum: "II[b, t, w] = II_in[b, t, w]"
+      is_copy_operation: True
+
+    # Decoder QKV
+    - einsum: "VV[b, t, q, r] = II[b, t, w] * WWV[q, r, w]"
+    - einsum: "KK[b, t, q, r] = II[b, t, w] * WWK[q, r, w]"
+    - einsum: "QQ[b, t, q, r] = II[b, t, w] * WWQ[q, r, w]"
+
+    # Decoder attention
+    - einsum: "QQKK[b, t, i, q] = QQ[b, t, q, r] * KK[b, T: i, q, r]"
+    - einsum: "QQKK_softmax[b, t, i, q] = QQKK[b, t, i, q]"
+
+    - einsum: "AAV[b, t, q, s] = QQKK_softmax[b, t, i, q] * VV[b, T: i, q, R: s]"
+
+    # Decoder sN
+    - einsum: "ZZ[b, t, z] = AAV[b, t, q, s] * WWZ[q, s, z]"
+    - einsum: "FFFA[b, t, x] = ZZ[b, t, z] * WFFFA[z, x]"
+    - einsum: "FFFB[b, t, y] = FFFA[b, t, x] * WFFFB[x, y]"
+
+renames:
+  einsums:
+    - name: default
+      tensor_axesses:
+        - name: input
+          source: Inputs & Intermediates if len(All) == 3 else Inputs
+          expected_count: 1
+        - name: output
+          source: Outputs
+          expected_count: 1
+        - name: weight
+          source: ~(input | output)
+          expected_count: 1 if len(All) == 3 else 0

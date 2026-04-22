@@ -55,7 +55,7 @@ workload:
     - einsum: "QK[b, m, p, h] = Q[b, m, h, e] * K[b, M: p, h, e]"
     - einsum: "QK_softmax[b, m, p, h] = QK[b, m, p, h]"
 
-    # Attention ailication
+    # Attention
     - einsum: "AV[b, m, h, f] = QK_softmax[b, m, p, h] * V[b, M: p, h, E: f]"
 
     # Output projection + sN
