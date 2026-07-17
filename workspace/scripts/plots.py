@@ -27,8 +27,12 @@ def bar_side_by_side(data, xlabel="", ylabel="", title="", ax=None):
     if not categories:
         return ax
 
+    # dict.fromkeys() dedupes while preserving first-seen order; a plain
+    # set() here would make the bar order (and therefore which color goes
+    # with which series) vary between runs, since Python randomizes string
+    # hash order per-process.
     series_names = list(
-        set(k for inner in data.values() for k in inner.keys())
+        dict.fromkeys(k for inner in data.values() for k in inner.keys())
     )
 
     x = np.arange(len(categories))
@@ -104,7 +108,10 @@ def bar_stacked(data, xlabel="", ylabel="", title="", ax=None):
         _, ax = plt.subplots(figsize=(12, 6))
 
     categories = list(data.keys())
-    stack_keys = list(set(k for inner in data.values() for k in inner.keys()))
+    # See bar_side_by_side: dict.fromkeys() keeps first-seen order so the
+    # stacking order (and color-to-segment mapping) is stable across runs,
+    # instead of shuffling with set()'s per-process hash randomization.
+    stack_keys = list(dict.fromkeys(k for inner in data.values() for k in inner.keys()))
 
     x = np.arange(len(categories))
     bottoms = np.zeros(len(categories))
