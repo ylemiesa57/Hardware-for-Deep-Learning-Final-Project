@@ -151,7 +151,14 @@ def round_rank_sizes(workload):
 
     def _round(n) -> int:
         prime_factors = _get_prime_factors(n)
-        # Any prime factors > 16 get rounded
+        # NOTE: this comment previously said "prime factors > 16 get
+        # rounded", which didn't match the code below (threshold is 8,
+        # not 16). Fixed the comment to describe what the code actually
+        # does; left the threshold value itself untouched since changing
+        # it would be a behavior change that needs Kiya's input on the
+        # intended CiM array-size constraint, not just a docs fix.
+        # Prime factors >= 8 get rounded further (split into smaller
+        # factors by recursing on factor + 1, which pulls a 2 in).
         new_prime_factors = []
         for factor in prime_factors:
             if factor < 8:
