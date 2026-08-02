@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import heapq
 from dataclasses import dataclass, field
+from math import log
 
 import numpy as np
 
@@ -174,12 +175,47 @@ def simulate_lfu_cost_aware(
         elapsed = step - last_step.get(doc, step)
         return base_count.get(doc, 0.0) * (decay_factor ** elapsed)
 
+    def _log_priority(doc: int) -> float:
+        """Step-independent stand-in for log(priority(doc, step)).
+
+        priority(doc, step) = gen_latency * base_count * decay_factor**(step - last_step)
+                             = [gen_latency * base_count * decay_factor**(-last_step)] * decay_factor**step
+
+        The bracketed term is the only thing that varies by doc; the trailing
+        decay_factor**step term is identical for every doc at a given step, so
+        it never changes the argmin ranking and can be dropped. That means the
+        heap can be ranked once at push time using the bracketed term alone,
+        with no need to ever revisit an idle item's entry: its rank relative
+        to any other doc is the same at every later step, not just the step
+        it was pushed at.
+
+        This used to be computed directly as gen_latency * effective_count(doc,
+        step_pushed), i.e. with elapsed pinned to 0 -- equivalent to dropping
+        the decay_factor**(-last_step) term entirely. That silently gave every
+        freshly-inserted doc the same priority scale as a doc that had built up
+        a large counter long ago and hasn't been touched since, so a
+        heavily-but-anciently accessed doc could sit in cache indefinitely
+        while fresh, genuinely more relevant docs got evicted around it --
+        exactly backwards from what "decay" is supposed to buy the eviction
+        policy.
+
+        Working in log-space (rather than computing decay_factor**(-last_step)
+        directly) avoids overflow: for the large traces this module is meant
+        for (docstring above recommends n_docs_trace >= 2_000_000), last_step
+        can be large enough that decay_factor**(-last_step) overflows to inf,
+        whereas -last_step * log(decay_factor) grows only linearly.
+        """
+        bc = base_count.get(doc, 0.0)
+        if bc <= 0.0:
+            return float("-inf")
+        gl = gen_latency.get(doc, 1.0)
+        return log(gl) + log(bc) - last_step.get(doc, 0) * log(decay_factor)
+
     def _push(doc: int, step: int) -> None:
         _gen[0] += 1
         gid = _gen[0]
         heap_gen[doc] = gid
-        priority = gen_latency.get(doc, 1.0) * _effective_count(doc, step)
-        heapq.heappush(heap, (priority, gid, doc))
+        heapq.heappush(heap, (_log_priority(doc), gid, doc))
 
     def _evict_one(step: int) -> None:
         """Pop the min-priority item still in cache (skip stale heap entries)."""

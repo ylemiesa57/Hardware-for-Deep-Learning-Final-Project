@@ -84,6 +84,52 @@ class TestHitMissAccounting:
         assert opt_result.hits == 0
 
 
+class TestDecayActuallyStalesIdleEntries:
+    """Regression test for the eviction-priority staleness bug.
+
+    simulate_lfu_cost_aware() is documented as evicting
+    argmin(gen_latency * counter) with per-step exponential decay applied to
+    the counter. Before the fix, a doc's heap priority was frozen at
+    gen_latency * base_count computed at the step it was last touched (i.e.
+    decay's `elapsed` term pinned to 0 at push time), and was never revisited
+    while the doc just sat in cache untouched. That let a doc which built up
+    a large counter long ago, then went idle, keep out-ranking (and so
+    out-surviving) fresher, single-touch docs indefinitely -- exactly
+    backwards from what "decay" is supposed to buy the eviction policy.
+
+    This drives the scenario entirely through the public simulate_lfu_cost_aware()
+    API (no reaching into internals): doc 0 is touched 10x up front (building
+    a base_count that decays to ~6.5), then goes idle for 400 steps while a
+    long stream of distinct, single-touch docs cycles through a small cache,
+    then the 5 most-recently-inserted docs from that stream are re-touched.
+    With decay correctly taken into account, doc 0 should have long since
+    been evicted in favor of fresher docs, so those 5 re-touches should all
+    be cache hits. Under the bug, doc 0 permanently occupies one of the 5
+    slots and, worse, its stale priority (~6.5) outranks every fresh doc's
+    priority (1.0) at push time too, so none of the re-touched docs are
+    still resident either -- all 5 come back as misses instead.
+    """
+
+    def test_heavily_accessed_then_idle_doc_stops_blocking_fresh_docs(self):
+        n_fresh = 400
+        capacity = 5
+        last_five = list(range(n_fresh - 4, n_fresh + 1))
+        trace = [0] * 10 + list(range(1, n_fresh + 1)) + last_five
+        gen_latency = {d: 1.0 for d in range(n_fresh + 1)}
+
+        result = simulate_lfu_cost_aware(
+            trace, capacity=capacity, gen_latency=gen_latency, decay_factor=0.9
+        )
+
+        phase3_positions = range(len(trace) - 5, len(trace))
+        phase3_hits = sum(1 for p in phase3_positions if p not in result.miss_positions)
+        assert phase3_hits == 5, (
+            f"expected all 5 recently-inserted docs to still be cached and "
+            f"hit on re-touch, got {phase3_hits}/5 -- doc 0's decayed-long-ago "
+            f"priority is still blocking fresher docs from the cache"
+        )
+
+
 class TestBeladyIsOptimal:
     """Belady's OPT should never do worse than a cache-limited heuristic or no cache."""
 
