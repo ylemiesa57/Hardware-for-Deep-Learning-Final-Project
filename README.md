@@ -106,3 +106,18 @@ DRAM, SD-card-backed disk corpus (mirrors EdgeRAG's evaluation platform).
 All experiments hold PE array dimensions, SRAM capacity, and DRAM capacity
 constant unless that dimension is the swept variable. We report energy per query,
 latency per query, and energy-delay product.
+
+## Testing
+
+`workspace/scripts/tests/` covers `cache_sim.py`'s trace generator and three
+cache-replacement policies, and a determinism regression for `plots.py`'s
+series/stack ordering. These don't need the full AccelForge Docker image --
+just `pytest`, `numpy`, and `matplotlib`:
+
+```bash
+pip install pytest numpy matplotlib
+cd workspace && python -m pytest scripts/tests/ -v
+```
+
+A GitHub Actions workflow (`.github/workflows/ci.yml`) runs the same suite on
+every push and pull request.
