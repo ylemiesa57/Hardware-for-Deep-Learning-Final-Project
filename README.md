@@ -60,6 +60,16 @@ export DOCKER_ARCH=amd64     # or arm64 on M1/M2
 docker compose up
 ```
 
+Optional: to set file ownership to your user, export `USER_UID` and `USER_GID`:
+
+```bash
+# Linux / Apple Silicon (set file ownership to your user)
+export DOCKER_ARCH=amd64
+export USER_UID=$(id -u)
+export USER_GID=$(id -g)
+docker compose up
+```
+
 This launches the `timeloopaccelergy/accelforge:latest-${DOCKER_ARCH}` image with
 the repo mounted at `/home/workspace` and Jupyter on port **8888** (no token).
 Open <http://localhost:8888> and run `workspace/M2-Analysis.ipynb`.
