@@ -19,6 +19,15 @@ class Result:
     """Wrapper around AccelForge Mappings providing a convenient interface."""
 
     def __init__(self, mappings, variables=None):
+        """Initialize a Result wrapper around AccelForge Mappings.
+
+        Parameters
+        ----------
+        mappings : accelforge.Mappings
+            AccelForge Mappings object containing energy and compute metrics.
+        variables : dict, optional
+            Variable overrides used in this mapping run (for reference).
+        """
         self._mappings = mappings
         self.variables = variables or {}
         self._per_component_energy = None
@@ -26,12 +35,30 @@ class Result:
 
     @property
     def computes(self):
+        """Total number of compute operations in the mapping.
+
+        Cached on first access.
+
+        Returns
+        -------
+        int
+            Total computes from the AccelForge Mappings object.
+        """
         if self._computes is None:
             self._computes = self._mappings.n_computes()
         return self._computes
 
     @property
     def per_component_energy(self):
+        """Energy breakdown by component (e.g., 'SRAM', 'DRAM', 'MAC').
+
+        Cached on first access.
+
+        Returns
+        -------
+        dict[str, float]
+            Mapping from component name to total energy (pJ).
+        """
         if self._per_component_energy is None:
             raw = self._mappings.energy(per_component=True)
             self._per_component_energy = {
